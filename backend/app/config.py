@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     coingecko_api_key: str = ""  # optional on free tier
 
     # --- Infra ---
-    database_url: str = "postgresql+asyncpg://user:pass@localhost:5432/trading"
+    database_url: str = "postgresql+asyncpg://user:pass@localhost:5433/trading"
     redis_url: str = "redis://localhost:6379/0"
 
     # --- Behaviour / demo config ---
@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     # Paper trading (Task 7 minimal — full PnL tracking is Task 15)
     paper_equity_usd: float = 100_000.0
+
+    # Memory recall (pgvector) — set false for streaming-only demos without Postgres
+    memory_enabled: bool = True
 
     @property
     def universe_symbols(self) -> list[str]:

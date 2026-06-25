@@ -27,6 +27,20 @@ def test_extract_json_handles_braces_in_strings():
     assert obj["thesis"] == "a {nested} brace"
 
 
+def test_extract_json_returns_last_object_when_schema_echoed():
+    # Regression: the model echoes the (invalid) schema, then emits the real JSON last.
+    text = (
+        "Thinking out loud about the trade.\n"
+        'Output JSON: { "concerns": [str], "adjusted_confidence": 0..1, "veto": bool }\n'
+        "...reasoning...\n"
+        '{"concerns": ["funding elevated at 0.04%"], "adjusted_confidence": 0.35, '
+        '"suggested_size_pct": 2.0, "stop_loss_pct": 4.5, "veto": false}'
+    )
+    obj = llm_mod._extract_json_object(text)
+    assert obj["adjusted_confidence"] == 0.35 and obj["veto"] is False
+    assert obj["concerns"] == ["funding elevated at 0.04%"]
+
+
 def test_coerce_to_signal_schema_coerces_and_validates():
     raw = {"direction": "BUY", "confidence": "0.65", "thesis": "x", "horizon": "intraday"}
     out = llm_mod._coerce_to_schema(raw, Signal)

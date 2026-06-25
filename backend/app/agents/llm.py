@@ -59,23 +59,20 @@ def _content_to_text(content: Any) -> str:
     return "".join(parts)
 
 
-def _extract_json_object(text: str) -> dict:
-    """Pull the first balanced ``{...}`` JSON object out of (possibly prose-wrapped) text."""
-    stripped = text.strip()
-    try:
-        obj = json.loads(stripped)
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
-
-    start = stripped.find("{")
-    while start != -1:
+def _balanced_objects(text: str) -> list[str]:
+    """Return every top-level ``{...}`` span in ``text`` (string-aware brace matching)."""
+    spans: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "{":
+            i += 1
+            continue
         depth = 0
         in_str = False
         esc = False
-        for i in range(start, len(stripped)):
-            ch = stripped[i]
+        end = None
+        for j in range(i, n):
+            ch = text[j]
             if in_str:
                 if esc:
                     esc = False
@@ -91,14 +88,37 @@ def _extract_json_object(text: str) -> dict:
                 elif ch == "}":
                     depth -= 1
                     if depth == 0:
-                        candidate = stripped[start : i + 1]
-                        try:
-                            obj = json.loads(candidate)
-                            if isinstance(obj, dict):
-                                return obj
-                        except json.JSONDecodeError:
-                            break  # try next '{'
-        start = stripped.find("{", start + 1)
+                        end = j
+                        break
+        if end is None:
+            break  # unbalanced (likely truncated) — nothing more to scan
+        spans.append(text[i : end + 1])
+        i = end + 1
+    return spans
+
+
+def _extract_json_object(text: str) -> dict:
+    """Pull the *last* balanced JSON object out of (possibly prose-wrapped) text.
+
+    Agents are instructed to "end with ONE JSON block", so the final parseable object
+    is the answer — scanning last-first avoids picking up schema echoes or braces that
+    appear earlier in the streamed reasoning.
+    """
+    stripped = text.strip()
+    try:
+        obj = json.loads(stripped)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+
+    for candidate in reversed(_balanced_objects(stripped)):
+        try:
+            obj = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
 
     raise ValueError(f"no parseable JSON object found in model output: {text[:200]!r}")
 
@@ -159,8 +179,12 @@ async def structured_llm(
 
     The model is asked to emit JSON; the response (which may have surrounding prose)
     is parsed and validated against the schema. Raises ValueError if it cannot be coerced.
+
+    Streaming is left ON so that, when this call runs inside the graph's
+    ``astream_events``, the reasoning prose surfaces as tagged ``on_chat_model_stream``
+    events (per-agent token attribution) while ``ainvoke`` still returns the full message.
     """
-    llm = make_llm(tier, streaming=False, max_tokens=max_tokens)
+    llm = make_llm(tier, streaming=True, max_tokens=max_tokens)
     messages = [SystemMessage(content=system), HumanMessage(content=user)]
     resp = await llm.ainvoke(messages, config={"tags": tags or []})
     text = _content_to_text(resp.content)

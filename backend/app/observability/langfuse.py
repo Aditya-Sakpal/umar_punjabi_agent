@@ -1,22 +1,22 @@
 """LangFuse callback handler factory (stub — full tracing in Task 20)."""
 from __future__ import annotations
 
-from typing import Any
+from langchain_core.callbacks.base import AsyncCallbackHandler
 
 
-class _NoOpCallbackHandler:
-    """Placeholder until LangFuse SDK is wired with settings."""
+class _NoOpCallbackHandler(AsyncCallbackHandler):
+    """LangChain-compatible no-op until LangFuse SDK is wired."""
 
-    def __init__(self, **_: Any) -> None:
-        pass
+    run_inline: bool = False
 
 
 def langfuse_handler(
     run_id: str,
     symbol: str,
     trigger: str = "user",
-) -> Any:
+) -> AsyncCallbackHandler:
     """Return a LangChain callback handler for this run, or a no-op stub."""
-    # Full implementation deferred to observability phase; orchestrator always
-    # receives a list-shaped callbacks slot for future LangFuse wiring.
-    return _NoOpCallbackHandler(run_id=run_id, symbol=symbol, trigger=trigger)
+    # Full implementation deferred to observability phase; must subclass
+    # AsyncCallbackHandler so LangGraph's astream_events callback manager works.
+    del run_id, symbol, trigger
+    return _NoOpCallbackHandler()

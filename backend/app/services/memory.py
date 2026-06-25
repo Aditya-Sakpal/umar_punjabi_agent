@@ -6,10 +6,11 @@ import logging
 import uuid
 from typing import TypedDict
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agents.state import AgentState
+from app.config import settings
 from app.db.models import Memory
 from app.services.embeddings import Embedder
 
@@ -129,6 +130,30 @@ class MemoryRecallService:
     ) -> None:
         self._session_factory = session_factory
         self._embedder = embedder
+        self._db_checked = False
+        self._db_available = False
+        self._db_warned = False
+
+    async def _database_ready(self) -> bool:
+        """Probe Postgres once per process; skip embedder work when unreachable."""
+        if not settings.memory_enabled:
+            return False
+        if self._db_checked:
+            return self._db_available
+        self._db_checked = True
+        try:
+            async with self._session_factory() as session:
+                await session.execute(text("SELECT 1"))
+            self._db_available = True
+        except Exception as exc:
+            self._db_available = False
+            if not self._db_warned:
+                logger.warning(
+                    "memory database unavailable (%s) — recall/store disabled for this process",
+                    exc,
+                )
+                self._db_warned = True
+        return self._db_available
 
     async def recall(
         self,
@@ -138,7 +163,7 @@ class MemoryRecallService:
         limit: int = 5,
     ) -> list[SimilarMemory]:
         """Return top similar memories for ``symbol``, ordered by cosine similarity."""
-        if not query.strip():
+        if not query.strip() or not await self._database_ready():
             return []
         try:
             query_vec = self._embedder.embed(query)
@@ -163,7 +188,7 @@ class MemoryRecallService:
                 for row in rows
             ]
         except Exception:
-            logger.exception("memory recall failed symbol=%s", symbol)
+            logger.warning("memory recall query failed symbol=%s", symbol, exc_info=True)
             return []
 
     async def store(
@@ -174,6 +199,8 @@ class MemoryRecallService:
         metadata: dict,
     ) -> str | None:
         """Persist one memory row; returns id or None on failure."""
+        if not await self._database_ready():
+            return None
         try:
             embedding = self._embedder.embed(summary)
             row_id = str(uuid.uuid4())
@@ -190,7 +217,7 @@ class MemoryRecallService:
                 await session.commit()
             return row_id
         except Exception:
-            logger.exception("memory store failed symbol=%s", symbol)
+            logger.warning("memory store failed symbol=%s", symbol, exc_info=True)
             return None
 
     async def store_from_run(self, state: AgentState) -> str | None:
